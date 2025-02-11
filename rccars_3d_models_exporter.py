@@ -1,4 +1,4 @@
-# RCCars 3D Models Exporter v 1.0
+# RCCars 3D Models Exporter v 1.1
 # ** - обозначает отображение чанков в .sb файле. Т.к. данные в .sb файле записаны "зеркально", то, 
 # если в .sb файле чанк записан как **0092h, то в оригинале это значение 9200h. Как и **HSEM - это MESH.
 # Помечаю для более удобного чтения чанков в файле при его разборе. 
@@ -336,6 +336,9 @@ class SBFileParser(object):
                 self.file_cursor += 1
 
 def build_models(modl):
+    # создадим коллекцию
+    col = bpy.data.collections.new(modl.name)
+    bpy.context.scene.collection.children.link(col)
     # создадим меши
     for m in modl.mesh_list:
         if m.is_blank_mesh:
@@ -343,7 +346,8 @@ def build_models(modl):
         mesh = bpy.data.meshes.new(m.name)
         mesh.from_pydata(m.vertex_list, [], m.face_list)
         model = bpy.data.objects.new(m.name, mesh)
-        bpy.context.scene.collection.objects.link(model)
+        # bpy.context.scene.collection.objects.link(model)
+        bpy.data.collections[modl.name].objects.link(model)
 
 def work(file_path):
     if len(file_path) == 0:
