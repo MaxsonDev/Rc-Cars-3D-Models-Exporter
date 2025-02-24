@@ -1,10 +1,13 @@
-# RCCars 3D Models Exporter v 1.1
+# RCCars 3D Models Exporter v 1.2
 # ** - обозначает отображение чанков в .sb файле. Т.к. данные в .sb файле записаны "зеркально", то, 
 # если в .sb файле чанк записан как **0092h, то в оригинале это значение 9200h. Как и **HSEM - это MESH.
 # Помечаю для более удобного чтения чанков в файле при его разборе. 
 # P.S. ****h - h обозначает, что число записано в 16-й системе счисления. Как и префикс 0x в иных случаях обозначает тоже самое.
 import os
 import bpy
+import math
+
+from mathutils import Matrix
 from struct import *
 
 # Cигнатура .sb файла - 3801h(**0138h). Всего 2 сигнатуры. 2ю не помню. Потом как-нибудь впишу. 
@@ -53,8 +56,13 @@ class MESHMod(object):
         self.is_blank_mesh = True
         self.start = None
         self.end = None
+        
         self.vertex_list = []
         self.face_list = []
+        
+        self.location = [0, 0, 0]
+        self.scale = [1, 1, 1]
+        self.rotation = [0, 0, 0]
 
 
 class SBFileParser(object):
@@ -71,7 +79,7 @@ class SBFileParser(object):
         try:
             signa = read_ushort(self.fb)
             # проверяем правильногсть сигнатуры и является ли файл .sb файлом 
-            if signa != SB_FILE_SIGNATURE and self.file_path[-3:] == ".sb":
+            if signa != SB_FILE_SIGNATURE and self.file_path[-3:].upper() == ".SB":
                 # raise RuntimeError("Invalid file signature: %08d" % (magic))
                 raise RuntimeError("Неверная сигнатура файла: %08d. Либо выбран не тот файл." % (signa))
             self.parse_file_headers()
@@ -239,7 +247,31 @@ class SBFileParser(object):
                         cursor += control_sum
                     else:
                         cursor += 1
-                        self.fb.seek(cursor)
+                        self.fb.seek(cursor) 
+                else:
+                    cursor += 1
+                    self.fb.seek(cursor)
+            # Ищем чанк 540Bh(**0B54h), который хранит информацию о трансформации объекта в пространстве.
+            # Всего 1 чанк с данными. 9 флоат значений: 3 флоат положения, 3 флота масштаб, 3 флоат вращение
+            # Формула контрольной суммы будет таковой:
+            # Чанк 0B54h[2 байта] + указатель на конец данных[4 байта] + число значеий трансфориации(9)[4 байта] + 3 значения на каждый вид трансформации[3*4 байта]
+            elif fst_byte == 0x0B:
+                sec_byte = read_char(self.fb)
+                if sec_byte == 0x54:
+                    # считаем сумму и сверяем с указателем на конец
+                    # указатель
+                    end_data = read_uint(self.fb)
+                    # кол-во значений: 9
+                    value_count = read_uint(self.fb)
+                    control_sum = 2 + 4 + 4 + value_count * 4
+                    if end_data - cursor == control_sum and value_count == 9:
+                        mesh.location = unpack("fff", self.fb.read(3*4))
+                        mesh.scale = unpack("fff", self.fb.read(3*4))
+                        mesh.rotation = [math.radians(i) for i in unpack("fff", self.fb.read(3*4))]
+                        cursor += control_sum
+                    else:
+                        cursor += 1
+                        self.fb.seek(cursor) 
                 else:
                     cursor += 1
                     self.fb.seek(cursor)
@@ -343,11 +375,25 @@ def build_models(modl):
     for m in modl.mesh_list:
         if m.is_blank_mesh:
             continue
+        # создаем меш
         mesh = bpy.data.meshes.new(m.name)
         mesh.from_pydata(m.vertex_list, [], m.face_list)
-        model = bpy.data.objects.new(m.name, mesh)
-        # bpy.context.scene.collection.objects.link(model)
-        bpy.data.collections[modl.name].objects.link(model)
+        # создаем объект. к нему привязывается меш.
+        obj = bpy.data.objects.new(m.name, mesh)
+        # obj.location = m.location
+        # создаем матрицу позиции
+        translation_matrix = Matrix.Translation(m.location)
+        obj.matrix_world @= translation_matrix
+        # матрица вращения. задается отдельными осями
+        for n, axis in enumerate('XYZ'):
+            rotation_matrix = Matrix.Rotation(m.rotation[n], 4, axis)
+            obj.matrix_world @= rotation_matrix
+        # матрица масштабирования. задается отдельными осями
+        for n, axis in enumerate([(1,0,0), (0,1,0), (0,0,1)]):
+            scale_matrix = Matrix.Scale(m.scale[n], 4, axis)
+            obj.matrix_world @= scale_matrix
+        # добавляем объект в коллекцию
+        bpy.data.collections[modl.name].objects.link(obj)
 
 def work(file_path):
     if len(file_path) == 0:
